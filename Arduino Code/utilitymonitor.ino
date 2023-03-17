@@ -2,19 +2,25 @@
 #include <Adafruit_AM2315.h>
 #include <avr/io.h>
 #include <avr/pgmspace.h>
-#include <Ethernet2.h>
-//#include <Ethernet.h>
+#include <Ethernet.h>
 #include <EEPROM.h>
+#include <Dns.h>
+
 const char* ip_to_str(const uint8_t*);
-byte mac[] = {0x00, 0xAA, 0xBB, 0xCC, 0xDE, 0x03 };    //Utility_Mon
+byte mac[] = {0x00, 0xAA, 0xBB, 0xCC, 0xDE, 0x03 }; 
 byte serverip[] = {192, 168, 1, 13};
 EthernetClient client;
+DNSClient dnClient;
+IPAddress healthcheckio_IP;
 
 //temp and humidty sensor variables
 bool AM2315_detected=false;
 Adafruit_AM2315 am2315;
 unsigned long temp_hum_interval=10000;
+long interval_heartbeat = 900000;
 unsigned long temp_hum_previousMillis;
+long previousMillis_heartbeat = 0;
+
 float average_temp[6];
 float average_hum[6];
 byte average_counter=0;
@@ -82,171 +88,180 @@ unsigned long previousMillis = 0;
 unsigned long currentMillis = 0;
 unsigned long duration_clac = 0;
 long water_heater_interval = 30000; // READING water_heater_interval 30 seconds
-byte localip[4];        //the local system IP, either local or DHCP generated depending on user preference
-byte subnetmask[4];
-byte gateway[4];
-byte dnsServerIp[4];      //system variable for the DNS server to use to resolve the NTP server URL. 
-#define LOCALIPADDREEPROMADDRPART1 30
-#define LOCALIPADDREEPROMADDRPART2 31
-#define LOCALIPADDREEPROMADDRPART3 32
-#define LOCALIPADDREEPROMADDRPART4 33
-#define SUBNETMASKEEPROMADDRPART1 34
-#define SUBNETMASKEEPROMADDRPART2 35
-#define SUBNETMASKEEPROMADDRPART3 36
-#define SUBNETMASKEEPROMADDRPART4 37
-#define GATEWAYEEPROMADDRPART1 38
-#define GATEWAYEEPROMADDRPART2 39
-#define GATEWAYEEPROMADDRPART3 40
-#define GATEWAYEEPROMADDRPART4 41
-#define DNSSERVEREEPROMADDRPART1 42
-#define DNSSERVEREEPROMADDRPART2 43
-#define DNSSERVEREEPROMADDRPART3 44
-#define DNSSERVEREEPROMADDRPART4 45
 
 void setup() { 
 	Serial.begin(115200);
-pinMode(water_heater_pin, INPUT);
-pinMode(low_heat_pin, INPUT);
-pinMode(high_heat_pin, INPUT);
-pinMode(low_cool_pin, INPUT);
-pinMode(high_cool_pin, INPUT);
-pinMode(fan_pin, INPUT);
-pinMode(humidifier_pin, INPUT);
-pinMode(dehumidifier_pin, INPUT);
-pinMode(filter_pin, INPUT);
-pinMode(estop_pin, INPUT);
-if (! am2315.begin()) {
-     Serial.println(F("AM2315 Sensor not found, check wiring & pullups!"));
-    AM2315_detected=false;
-    Serial.print(F("AM2315_detected set to "));
-    Serial.println(AM2315_detected);
-}else{
-    Serial.println(F("AM2315 Sensor Detected!"));
-    AM2315_detected=true;
-    Serial.print(F("AM2315_detected set to "));
-    Serial.println(AM2315_detected);
-    Wire.setClock(31000L);//reset the TWI bus to a slower clock of 31,000 Hz to allow better data transmission over a greater length of cable
-    Serial.println(F("wire clock set to 31,000 Hz"));
-    am2315.readHumidity();
-    delay(100);
-    am2315.readTemperature();
-}
+	pinMode(water_heater_pin, INPUT);
+	pinMode(low_heat_pin, INPUT);
+	pinMode(high_heat_pin, INPUT);
+	pinMode(low_cool_pin, INPUT);
+	pinMode(high_cool_pin, INPUT);
+	pinMode(fan_pin, INPUT);
+	pinMode(humidifier_pin, INPUT);
+	pinMode(dehumidifier_pin, INPUT);
+	pinMode(filter_pin, INPUT);
+	pinMode(estop_pin, INPUT);
+	if (! am2315.begin()) {
+		Serial.println(F("AM2315 Sensor not found, check wiring & pullups!"));
+		AM2315_detected=false;
+		Serial.print(F("AM2315_detected set to "));
+		Serial.println(AM2315_detected);
+	}else{
+		Serial.println(F("AM2315 Sensor Detected!"));
+		AM2315_detected=true;
+		Serial.print(F("AM2315_detected set to "));
+		Serial.println(AM2315_detected);
+		Wire.setClock(31000L);//reset the TWI bus to a slower clock of 31,000 Hz to allow better data transmission over a greater length of cable
+		Serial.println(F("wire clock set to 31,000 Hz"));
+    delay(5000);
+		am2315.readHumidity();
+		delay(100);
+		am2315.readTemperature();
+	}
 
-    localip[0] = EEPROM.read(LOCALIPADDREEPROMADDRPART1);
-    localip[1] = EEPROM.read(LOCALIPADDREEPROMADDRPART2);
-    localip[2] = EEPROM.read(LOCALIPADDREEPROMADDRPART3);
-    localip[3] = EEPROM.read(LOCALIPADDREEPROMADDRPART4);
-    subnetmask[0] = EEPROM.read(SUBNETMASKEEPROMADDRPART1);
-    subnetmask[1] = EEPROM.read(SUBNETMASKEEPROMADDRPART2);
-    subnetmask[2] = EEPROM.read(SUBNETMASKEEPROMADDRPART3);
-    subnetmask[3] = EEPROM.read(SUBNETMASKEEPROMADDRPART4);
-    gateway[0] = EEPROM.read(GATEWAYEEPROMADDRPART1);
-    gateway[1] = EEPROM.read(GATEWAYEEPROMADDRPART2);
-    gateway[2] = EEPROM.read(GATEWAYEEPROMADDRPART3);
-    gateway[3] = EEPROM.read(GATEWAYEEPROMADDRPART4);
-    dnsServerIp[0] = EEPROM.read(DNSSERVEREEPROMADDRPART1);
-    dnsServerIp[1] = EEPROM.read(DNSSERVEREEPROMADDRPART2);
-    dnsServerIp[2] = EEPROM.read(DNSSERVEREEPROMADDRPART3);
-    dnsServerIp[3] = EEPROM.read(DNSSERVEREEPROMADDRPART4);
-    
-    Ethernet.begin(mac, localip, dnsServerIp, gateway, subnetmask); 
-    Serial.println(F("System is using Static Ethernet Settings."));
+    Serial.println(F("Initialize Ethernet with DHCP:"));
 
-    Serial.print(F("System IP address is "));
-    Serial.println(ip_to_str(localip));
+	if (Ethernet.begin(mac) == 0) {
+		Serial.println(F("Failed to configure Ethernet using DHCP"));
+		if (Ethernet.hardwareStatus() == EthernetNoHardware) {
+			Serial.println(F("Ethernet shield was not found.  Sorry, can't run without hardware. :("));
+		} else if (Ethernet.linkStatus() == LinkOFF) {
+			Serial.println(F("Ethernet cable is not connected."));
+		}
+		// no point in carrying on, so do nothing forevermore:
+		while (true) {
+			delay(10000);
+			Serial.println(F("Reset or Reboot the Arduino."));
+		}
+	}
+
+	// print your local IP address:
+	Serial.print("My IP address: ");
+	Serial.println(Ethernet.localIP());
   
-    Serial.print(F("Gateway address is "));
-    Serial.println(ip_to_str(gateway));
-  
-    Serial.print(F("DNS IP address is "));
-    Serial.println(ip_to_str(dnsServerIp));
-    
-    Serial.print(F("Subnet Mask is "));
-    Serial.println(ip_to_str(subnetmask));
+	dnClient.begin(Ethernet.dnsServerIP());
+	if(dnClient.getHostByName("hc-ping.com",healthcheckio_IP) == 1) {
+		Serial.print(F("hc-ping.com = "));
+		Serial.println(healthcheckio_IP);
+		Serial.println("");
+		Serial.println("");
+	}else{ 
+		Serial.print(F("dns lookup failed"));
+	}
 
 }
 
 void loop(){
-delay(2000);//DEBOUNCE
-  //read all pin status
-	 water_heater_state = digitalRead(water_heater_pin);
-   low_heat_state = digitalRead(low_heat_pin);
-   high_heat_state = digitalRead(high_heat_pin);
-   low_cool_state = digitalRead(low_cool_pin);
-   high_cool_state = digitalRead(high_cool_pin);
-   fan_state = digitalRead(fan_pin);
-   humidifier_state = digitalRead(humidifier_pin);
-   dehumidifier_state = digitalRead(dehumidifier_pin);
-   filter_state = digitalRead(filter_pin);
-   estop_state = digitalRead(estop_pin);
+  float temperature, humidity;
 
-
- 
+	//maintain DHCP IP lease
+	switch (Ethernet.maintain()) {
+		case 1:
+		  //renewed fail
+		  Serial.println(F("Error: renewed fail"));
+		  break;
+		case 2:
+		  //renewed success
+		  Serial.println(F("Renewed success"));
+		  //print your local IP address:
+		  Serial.print(F("My IP address: "));
+		  Serial.println(Ethernet.localIP());
+		  break;
+		case 3:
+		  //rebind fail
+		  Serial.println(F("Error: rebind fail"));
+		  break;
+		case 4:
+		  //rebind success
+		  Serial.println(F("Rebind success"));
+		  //print your local IP address:
+		  Serial.print(F("My IP address: "));
+		  Serial.println(Ethernet.localIP());
+		  break;
+		default:
+		  //nothing happened
+		  break;
+	}
+  
+	delay(2000);//DEBOUNCE
+	//read all pin status
+	water_heater_state = digitalRead(water_heater_pin);
+    low_heat_state = digitalRead(low_heat_pin);
+    high_heat_state = digitalRead(high_heat_pin);
+    low_cool_state = digitalRead(low_cool_pin);
+    high_cool_state = digitalRead(high_cool_pin);
+    fan_state = digitalRead(fan_pin);
+    humidifier_state = digitalRead(humidifier_pin);
+    dehumidifier_state = digitalRead(dehumidifier_pin);
+    filter_state = digitalRead(filter_pin);
+    estop_state = digitalRead(estop_pin);
+	
 	currentMillis = millis();
 
 
-//****************************************************************************
-//Start process the temperature and humidity
-//****************************************************************************
-  if (AM2315_detected==true){
-     if(currentMillis - temp_hum_previousMillis > temp_hum_interval) { // process once per interval
-     // float average_temp[6]=0;
-    //float average_hum[6]=0;
-    //byte average_counter=0;
-    if (average_counter <6){
-          average_hum[average_counter] = am2315.readHumidity();
-          delay(100);
-          average_temp[average_counter] = (am2315.readTemperature() *1.8)+32;
-           Serial.print(F("Hum: ")); Serial.println(average_hum[average_counter]);
-           Serial.print(F("Temp: ")); Serial.println(average_temp[average_counter]);
-           average_counter++;
-          temp_hum_previousMillis = currentMillis; 
-      }else{
-        average_counter=0;
-          average_hum[average_counter] = am2315.readHumidity();
-          delay(100);
-          average_temp[average_counter] = (am2315.readTemperature() *1.8)+32;
-           Serial.print(F("Hum: ")); Serial.println(average_hum[average_counter]);
-           Serial.print(F("Temp: ")); Serial.println(average_temp[average_counter]);
-           average_counter++;
-          temp_hum_previousMillis = currentMillis; 
-        Serial.println(F("Logging 1st floor average temperature"));
-        Serial.print(F("Average Hum: ")); Serial.println((average_hum[0] + average_hum[1] + average_hum[2] + average_hum[3] + average_hum[4] + average_hum[5])/6);
-           Serial.print(F("Average Temp: ")); Serial.println((average_temp[0] + average_temp[1] + average_temp[2] + average_temp[3] + average_temp[4] + average_temp[5])/6);
-          if (client.connect(serverip,80)) { // REPLACE WITH YOUR SERVER ADDRESS
-              Serial.println(F("Client Connected updating 1st floor temperature logs"));
-              client.print(F("GET /admin/first_floor_add.php?temp="));
-              client.print((average_temp[0] + average_temp[1] + average_temp[2] + average_temp[3] + average_temp[4] + average_temp[5])/6);
-              client.print(F("&hum="));
-              client.print((average_hum[0] + average_hum[1] + average_hum[2] + average_hum[3] + average_hum[4] + average_hum[5])/6);
-              client.println( F(" HTTP/1.1"));
-              client.println( F("Host: 192.168.1.13") );
-              client.println( F("Content-Type: application/x-www-form-urlencoded") );
-              client.println( F("Connection: close") );
-              client.println();
-              client.println();
-              client.println( F("Connection: close") );
-              client.println();
-              client.println();
-              client.println( F("Connection: close") );
-              client.println();
-              client.println();
-              client.stop();
-              client.stop();
-          } else{
-            Serial.println(F("could not connect to server"));
-          }
+	//****************************************************************************
+	//Start process the temperature and humidity
+	//****************************************************************************
+	if (AM2315_detected==true){
+		if(currentMillis - temp_hum_previousMillis > temp_hum_interval) { // process once per interval
+			if (average_counter <6){
+        
+      if (! am2315.readTemperatureAndHumidity(&temperature, &humidity)) {
+        return;
       }
-    }else{
-      //Serial.println(F("Temperature / Humidity Sensor Not Detected"));
-    }
-  }
+        average_hum[average_counter] = humidity;
+        average_temp[average_counter] = (temperature * 1.8 ) + 32.0;
+				Serial.print(F("Hum: ")); Serial.println(average_hum[average_counter]);
+				Serial.print(F("Temp: ")); Serial.println(average_temp[average_counter]);
+				average_counter++;
+				temp_hum_previousMillis = currentMillis; 
+			}else{
+				average_counter=0;
+        if (! am2315.readTemperatureAndHumidity(&temperature, &humidity)) {
+        return;
+      }
+        average_hum[average_counter] = humidity;
+        average_temp[average_counter] = (temperature * 1.8 ) + 32.0;
+				delay(100);
+				Serial.print(F("Hum: ")); Serial.println(average_hum[average_counter]);
+				Serial.print(F("Temp: ")); Serial.println(average_temp[average_counter]);
+				average_counter++;
+				temp_hum_previousMillis = currentMillis; 
+				Serial.println(F("Logging 1st floor average temperature"));
+				Serial.print(F("Average Hum: ")); Serial.println((average_hum[0] + average_hum[1] + average_hum[2] + average_hum[3] + average_hum[4] + average_hum[5])/6);
+				Serial.print(F("Average Temp: ")); Serial.println((average_temp[0] + average_temp[1] + average_temp[2] + average_temp[3] + average_temp[4] + average_temp[5])/6);
+				if (client.connect(serverip,80)) { 
+					Serial.println(F("Client Connected updating 1st floor temperature logs"));
+					client.print(F("GET /admin/first_floor_add.php?temp="));
+					client.print((average_temp[0] + average_temp[1] + average_temp[2] + average_temp[3] + average_temp[4] + average_temp[5])/6);
+					client.print(F("&hum="));
+					client.print((average_hum[0] + average_hum[1] + average_hum[2] + average_hum[3] + average_hum[4] + average_hum[5])/6);
+					client.println( F(" HTTP/1.1"));
+					client.println( F("Host: 192.168.1.13") );
+					client.println( F("Content-Type: application/x-www-form-urlencoded") );
+					client.println( F("Connection: close") );
+					client.println();
+					client.println();
+					client.println( F("Connection: close") );
+					client.println();
+					client.println();
+					client.println( F("Connection: close") );
+					client.println();
+					client.println();
+					client.stop();
+					client.stop();
+				} else{
+					Serial.println(F("could not connect to server"));
+				}
+			}
+		}
+	}
 
 
 
-//****************************************************************************
-//Start process the water heater data
-//****************************************************************************
+	//****************************************************************************
+	//Start process the water heater data
+	//****************************************************************************
 	if(currentMillis - previousMillis > water_heater_interval) { // READ ONLY ONCE PER water_heater_interval
     	previousMillis = currentMillis;	
 		if (water_heater_state == LOW){
@@ -297,182 +312,203 @@ delay(2000);//DEBOUNCE
 			}
 		}
 	}
-//****************************************************************************
-//END process the water heater data
-//****************************************************************************
+	//****************************************************************************
+	//END process the water heater data
+	//****************************************************************************
 
 
 
-//****************************************************************************
-//Start LOW HEAT data
-//****************************************************************************
-  HVAC_process(low_heat_state, low_heat_pin_active_level, "Low Heat", low_heat_sent_flag, low_heat_timer, "low_heat", "low_heat_log.php");
+	//****************************************************************************
+	//Start LOW HEAT data
+	//****************************************************************************
+	HVAC_process(low_heat_state, low_heat_pin_active_level, "Low Heat", low_heat_sent_flag, low_heat_timer, "low_heat", "low_heat_log.php");
 
-//****************************************************************************
-//Start HIGH HEAT data
-//****************************************************************************
-  HVAC_process(high_heat_state, high_heat_pin_active_level, "High Heat", high_heat_sent_flag, high_heat_timer, "high_heat", "high_heat_log.php");
+	//****************************************************************************
+	//Start HIGH HEAT data
+	//****************************************************************************
+	HVAC_process(high_heat_state, high_heat_pin_active_level, "High Heat", high_heat_sent_flag, high_heat_timer, "high_heat", "high_heat_log.php");
 
-//****************************************************************************
-//Start LOW COOL data
-//****************************************************************************
-  HVAC_process(low_cool_state, low_cool_pin_active_level, "Low Cool", low_cool_sent_flag, low_cool_timer, "low_cool", "low_cool_log.php");
+	//****************************************************************************
+	//Start LOW COOL data
+	//****************************************************************************
+	HVAC_process(low_cool_state, low_cool_pin_active_level, "Low Cool", low_cool_sent_flag, low_cool_timer, "low_cool", "low_cool_log.php");
 
-//****************************************************************************
-//Start HIGH COOL data
-//****************************************************************************
-  HVAC_process(high_cool_state, high_cool_pin_active_level, "High Cool", high_cool_sent_flag, high_cool_timer, "high_cool", "high_cool_log.php");
+	//****************************************************************************
+	//Start HIGH COOL data
+	//****************************************************************************
+	HVAC_process(high_cool_state, high_cool_pin_active_level, "High Cool", high_cool_sent_flag, high_cool_timer, "high_cool", "high_cool_log.php");
 
-//****************************************************************************
-//Start fan data
-//****************************************************************************
-  HVAC_process(fan_state, fan_pin_active_level, "HVAC Fan", fan_sent_flag, fan_timer, "fan", "fan_log.php");
+	//****************************************************************************
+	//Start fan data
+	//****************************************************************************
+	HVAC_process(fan_state, fan_pin_active_level, "HVAC Fan", fan_sent_flag, fan_timer, "fan", "fan_log.php");
 
-//****************************************************************************
-//Start humidifier data
-//****************************************************************************
-  HVAC_process(humidifier_state, humidifier_pin_active_level, "Humidifier", humidifier_sent_flag, humidifier_timer, "humidifier", "humidifier_log.php");
+	//****************************************************************************
+	//Start humidifier data
+	//****************************************************************************
+	HVAC_process(humidifier_state, humidifier_pin_active_level, "Humidifier", humidifier_sent_flag, humidifier_timer, "humidifier", "humidifier_log.php");
 
 
-//****************************************************************************
-//Start dehumidifier data
-//****************************************************************************
-  HVAC_process(dehumidifier_state, dehumidifier_pin_active_level, "De-humidifier", dehumidifier_sent_flag, dehumidifier_timer, "dehumidifier", "dehumidifier_log.php");
+	//****************************************************************************
+	//Start dehumidifier data
+	//****************************************************************************
+	HVAC_process(dehumidifier_state, dehumidifier_pin_active_level, "De-humidifier", dehumidifier_sent_flag, dehumidifier_timer, "dehumidifier", "dehumidifier_log.php");
 
-//****************************************************************************
-//Start filter data
-//****************************************************************************
-  HVAC_process(filter_state, filter_pin_active_level, "HVAC Filter", filter_sent_flag, filter_timer, "filter", "filter_log.php");
+	//****************************************************************************
+	//Start filter data
+	//****************************************************************************
+	HVAC_process(filter_state, filter_pin_active_level, "HVAC Filter", filter_sent_flag, filter_timer, "filter", "filter_log.php");
 
-//****************************************************************************
-//Start ESTOP data
-//****************************************************************************
-  HVAC_process(estop_state, estop_pin_active_level, "E-Stop", estop_sent_flag, estop_timer, "estop", "estop_log.php");
-  Serial.println();
-  Serial.println(F("__________________________________________"));
-  Serial.println();
+	//****************************************************************************
+	//Start ESTOP data
+	//****************************************************************************
+	HVAC_process(estop_state, estop_pin_active_level, "E-Stop", estop_sent_flag, estop_timer, "estop", "estop_log.php");
+	//Serial.println();
+	//Serial.println(F("__________________________________________"));
+	//Serial.println();
+	  
+	//****************************************************************************
+	//HEALTHCHECKS.IO ping processing 
+	//****************************************************************************
+	if(currentMillis - previousMillis_heartbeat > interval_heartbeat) { // PERFORM ONLY ONCE PER INTERVAL
+		previousMillis_heartbeat = currentMillis; 
+		if(dnClient.getHostByName("hc-ping.com",healthcheckio_IP) == 1) {
+			Serial.print(F("hc-ping.com = "));
+			Serial.println(healthcheckio_IP);
+		}else{
+			Serial.print(F("dns lookup failed"));
+		}
+
+		if (client.connect(healthcheckio_IP,80)) {
+			Serial.println(F("Heartbeat Client Connected"));
+			Serial.println("");
+			client.println(F("GET /xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx HTTP/1.1"));
+			client.println(F("Host: hc-ping.com"));
+			client.println(F("Connection: close"));
+			client.println();
+			client.stop();
+		} else{
+			Serial.print(F("Heartbeat could not connect to server"));
+		}
+	}
 }
 
 // Just a utility function to nicely format an IP address.
 const char* ip_to_str(const uint8_t* ipAddr)
 {
-  static char buf[16];
-  sprintf(buf, "%d.%d.%d.%d\0", ipAddr[0], ipAddr[1], ipAddr[2], ipAddr[3]);
-  return buf;
+	static char buf[16];
+	sprintf(buf, "%d.%d.%d.%d\0", ipAddr[0], ipAddr[1], ipAddr[2], ipAddr[3]);
+	return buf;
 }
 
 
 void HVAC_process(int state, int pin_active_level, const char* message, bool &sent_flag, unsigned long &timer, const char* sql_column, const char* log_php_file){
-//for "sql_column" acceptable inputs are "fan", "low_cool", "high_cool", "low_heat", "high_heat", "humidifier", "dehumidifier" without the quotes as those are the column names in the SQL server table
-  if (state == pin_active_level){ //stage active
-    Serial.print(message);
-    Serial.println(F(" Pin Active"));
-    if (sent_flag ==false){ //Have not updated server about the pin state yet
-      Serial.print(F("Sending "));
-      Serial.print(message);
-      Serial.println(F(" Pin Active State to server"));
-      timer = millis(); //record time when pin went active
+	//for "sql_column" acceptable inputs are "fan", "low_cool", "high_cool", "low_heat", "high_heat", "humidifier", "dehumidifier" without the quotes as those are the column names in the SQL server table
+	if (state == pin_active_level){ //stage active
+		//Serial.print(message);
+		//Serial.println(F(" Pin Active"));
+		if (sent_flag ==false){ //Have not updated server about the pin state yet
+			Serial.print(F("Sending "));
+			Serial.print(message);
+			Serial.println(F(" Pin Active State to server"));
+			timer = millis(); //record time when pin went active
       
-      //send message to server that the pin has become active
-      if (client.connect(serverip,80)) { // 
-        Serial.print(F("Client Connected - "));
-        Serial.print(message);
-        Serial.println(F(" state set to 1"));
-        client.print(F("GET /admin/hvac/state.php?column="));
-        client.print(sql_column);
-        client.print(F("&state=1"));
-        client.println( F(" HTTP/1.1"));
-        client.println( F("Host: 192.168.1.13") );
-        client.println( F("Content-Type: application/x-www-form-urlencoded") );
-        client.println( F("Connection: close") );
-        client.println();
-        client.println();
-        client.println( F("Connection: close") );
-        client.println();
-        client.println();
-        client.println( F("Connection: close") );
-        client.println();
-        client.println();
-        client.stop();
-        client.stop();
-        sent_flag = true; //we sent the message to the server, set the flag so it is not sent again while the pin is active
-      } else{
-        Serial.println(F("could not connect to server"));
-        sent_flag = false;//because the server was not able to be updated, reset the flag so another attempt can be made to update server
-      }
-    }else{
-      Serial.print(F("Message already sent to server that "));
-      Serial.print(message);
-      Serial.println(F(" pin is active"));
-    }
-  }else{ //the pin is not active
-    Serial.print(message);
-    Serial.println(F(" Pin is NOT active"));
-    if (sent_flag ==true){//was it just previously active and a message sent to the server?
-      //time to update the server that the pin is no longer active and to send how long the pin was active for
+			//send message to server that the pin has become active
+			if (client.connect(serverip,80)) { // 
+				Serial.print(F("Client Connected - "));
+				Serial.print(message);
+				Serial.println(F(" state set to 1"));
+				client.print(F("GET /admin/hvac/state.php?column="));
+				client.print(sql_column);
+				client.print(F("&state=1"));
+				client.println( F(" HTTP/1.1"));
+				client.println( F("Host: 192.168.1.13") );
+				client.println( F("Content-Type: application/x-www-form-urlencoded") );
+				client.println( F("Connection: close") );
+				client.println();
+				client.println();
+				client.println( F("Connection: close") );
+				client.println();
+				client.println();
+				client.println( F("Connection: close") );
+				client.println();
+				client.println();
+				client.stop();
+				client.stop();
+				sent_flag = true; //we sent the message to the server, set the flag so it is not sent again while the pin is active
+			} else{
+				Serial.println(F("could not connect to server"));
+				sent_flag = false;//because the server was not able to be updated, reset the flag so another attempt can be made to update server
+			}
+		}else{
+			//Serial.print(F("Message already sent to server that "));
+			//Serial.print(message);
+			//Serial.println(F(" pin is active"));
+		}
+	}else{ //the pin is not active
+		//Serial.print(message);
+		//Serial.println(F(" Pin is NOT active"));
+		if (sent_flag ==true){//was it just previously active and a message sent to the server?
+			//time to update the server that the pin is no longer active and to send how long the pin was active for
 
-      //update server about pin status
-      if (client.connect(serverip,80)) { 
-        Serial.print(F("Client Connected - "));
-        Serial.print(message);
-        Serial.println(F(" state set to 0"));;
-        client.print(F("GET /admin/hvac/state.php?column="));
-        client.print(sql_column);
-        client.print(F("&state=0"));
-        client.println( F(" HTTP/1.1"));
-        client.println( F("Host: 192.168.1.13") );
-        client.println( F("Content-Type: application/x-www-form-urlencoded") );
-        client.println( F("Connection: close") );
-        client.println();
-        client.println();
-        client.println( F("Connection: close") );
-        client.println();
-        client.println();
-        client.println( F("Connection: close") );
-        client.println();
-        client.println();
-        client.stop();
-        client.stop();
-        sent_flag=false; //reset the message flasg for when the pin becomes active again
+			//update server about pin status
+			if (client.connect(serverip,80)) { 
+				Serial.print(F("Client Connected - "));
+				Serial.print(message);
+				Serial.println(F(" state set to 0"));;
+				client.print(F("GET /admin/hvac/state.php?column="));
+				client.print(sql_column);
+				client.print(F("&state=0"));
+				client.println( F(" HTTP/1.1"));
+				client.println( F("Host: 192.168.1.13") );
+				client.println( F("Content-Type: application/x-www-form-urlencoded") );
+				client.println( F("Connection: close") );
+				client.println();
+				client.println();
+				client.println( F("Connection: close") );
+				client.println();
+				client.println();
+				client.println( F("Connection: close") );
+				client.println();
+				client.println();
+				client.stop();
+				client.stop();
+				sent_flag=false; //reset the message flasg for when the pin becomes active again
 
-      } else{
-        Serial.println(F("could not connect to server"));
-        sent_flag=true; //reset the message flag because we still need to tell the server the pin has deactivated
-      }
+			} else{
+				Serial.println(F("could not connect to server"));
+				sent_flag=true; //reset the message flag because we still need to tell the server the pin has deactivated
+			}
 
+			//send length of time the pin was active
+			duration_clac = millis() - timer;
 
-      //send length of time the pin was active
-      duration_clac = millis() - timer;
-
-      if (client.connect(serverip,80)) { // 
-        Serial.print(F("Client Connected saving duration "));
-        Serial.print(message);
-        Serial.println(F(" was on"));
-        client.print(F("GET /admin/hvac/"));
-        client.print(log_php_file);
-        client.print(F("?duration="));
-        client.print(duration_clac);
-        client.println( F(" HTTP/1.1"));
-        client.println( F("Host: 192.168.1.13") );
-        client.println( F("Content-Type: application/x-www-form-urlencoded") );
-        client.println( F("Connection: close") );
-        client.println();
-        client.println();
-        client.println( F("Connection: close") );
-        client.println();
-        client.println();
-        client.println( F("Connection: close") );
-        client.println();
-        client.println();
-        client.stop();
-        client.stop();
-      } else{
-        Serial.println(F("could not connect to server"));
-      }
-      
-    }else{
-      //do nothing, pin is not active and the server has been updated
-    }
-  }
+			if (client.connect(serverip,80)) { // 
+				Serial.print(F("Client Connected saving duration "));
+				Serial.print(message);
+				Serial.println(F(" was on"));
+				client.print(F("GET /admin/hvac/"));
+				client.print(log_php_file);
+				client.print(F("?duration="));
+				client.print(duration_clac);
+				client.println( F(" HTTP/1.1"));
+				client.println( F("Host: 192.168.1.13") );
+				client.println( F("Content-Type: application/x-www-form-urlencoded") );
+				client.println( F("Connection: close") );
+				client.println();
+				client.println();
+				client.println( F("Connection: close") );
+				client.println();
+				client.println();
+				client.println( F("Connection: close") );
+				client.println();
+				client.println();
+				client.stop();
+				client.stop();
+			} else{
+				Serial.println(F("could not connect to server"));
+			}
+		}
+	}
 }
 
